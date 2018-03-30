@@ -96,11 +96,11 @@ void Kernel::computeEllip()
     // step3: eigenvalue decompose C to get the major and minor axis, the two vector form the
     //        x0y plane, cross them to get normal n as axis z
     Eigen::EigenSolver<Eigen::Matrix3d> es(C);
-    std::cout << C << std::endl;
+//    std::cout << C << std::endl;
     Eigen::Matrix3d V = es.pseudoEigenvectors();
-    std::cout << std::endl << V << std::endl;
+//    std::cout << std::endl << V << std::endl;
     Eigen::Matrix3d D = es.pseudoEigenvalueMatrix();
-    std::cout << std::endl << D << std::endl;
+//    std::cout << std::endl << D << std::endl;
     std::vector<double> eigVals(3);
     eigVals[0] = D(0, 0);
     eigVals[1] = D(1, 1);
@@ -144,11 +144,9 @@ void Kernel::computeEllip()
     // todo:: there should be a ellipse fitting, first extract the boundary, then do cv::fitEllipse
 //    cv::RotatedRect rect = cv::fitEllipse(pts);
     iter = std::max_element(Xs.begin(), Xs.end());
-    sigma_X = *iter / 3;
+    sigma_X = *iter / 10;
     iter = std::max_element(Ys.begin(), Ys.end());
-    sigma_Y = *iter / 3;
-
-
+    sigma_Y = *iter / 10;
 }
 
 #endif //INC_3D_POINT_FILTERING_KERNEL_H

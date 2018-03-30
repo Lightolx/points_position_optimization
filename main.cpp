@@ -13,6 +13,11 @@
 typedef pcl::PointXYZ PointT;
 typedef pcl::PointCloud<PointT> PointCloudT;
 
+const double EPSILON = 0.000001;
+
+using std::cout;
+using std::endl;
+
 struct SURFACE_FITTING_COST
 {
     SURFACE_FITTING_COST(Eigen::Vector3d c, double h, Eigen::Vector3d v1, Eigen::Vector3d v2,
@@ -25,6 +30,7 @@ struct SURFACE_FITTING_COST
     {
         Eigen::Matrix<T, 3, 1> p(position[0], position[1], position[2]);
         residual[0] = fai(p) * (pow(h_, 2) - pow((p - c_).dot(n_), 2));
+//        residual[0] = fai(p) * pow((p - c_).dot(n_), 2);
 
         return true;
     }
@@ -51,7 +57,8 @@ struct SURFACE_FITTING_COST
 int main()
 {
     // Step0: Read in raw points
-    std::ifstream fin("pts.txt");
+
+    std::ifstream fin("scissor.txt");
     std::string ptline;
     double x, y, z;
     std::vector<Eigen::Vector3d> points;
@@ -76,7 +83,16 @@ int main()
         std::cerr << "no ply file found!" << std::endl;
         abort();
     }
-     */
+
+    std::vector<Eigen::Vector3d> points;
+    points.reserve(cloud->size());
+    for (int i = 0; i < cloud->size(); i++)
+    {
+        points[i].x() = cloud->points[i].x;
+        points[i].y() = cloud->points[i].y;
+        points[i].z() = cloud->points[i].z;
+    }*/
+
 
     // Step1: For every point pi, Construct a kernel including it and its neighborhood, version 1: fixed kernel size
     // step1.1: find pi's neighbor
@@ -93,19 +109,9 @@ int main()
         cloud->points[i].z = points[i].z();
     }
 
-    /*
-    std::vector<Eigen::Vector3d> points;
-    points.reserve(cloud->size());
-    for (int i = 0; i < cloud->size(); i++)
-    {
-        points[i].x() = cloud->points[i].x;
-        points[i].y() = cloud->points[i].y;
-        points[i].z() = cloud->points[i].z;
-    }*/
-
     pcl::search::KdTree<PointT>::Ptr kdTree(new pcl::search::KdTree<PointT>);
     kdTree->setInputCloud(cloud);
-    float h = 0.2;                // kernel size
+    float h = 0.1;                // kernel size
     std::vector<int> pointsID;
     std::vector<float> pointsSquaredDist;
     std::vector<Eigen::Vector3d> neighbors;
@@ -128,6 +134,7 @@ int main()
             {
                 neighbors.push_back(points[id]);
             }
+            cout << "neighbor size is " << neighbors.size() << endl;
             kernel.setNeighbors(neighbors);
 
             // store this kernel
@@ -160,19 +167,21 @@ int main()
         ceres::Problem problem;
 
         // add up all kernel's influence as residual blocks
+        int j = 0;
+//        cout << "kernels size is " << kernels.size() << endl;
         for (const Kernel &kernel : kernels)
         {
-            Eigen::Vector3d c = kernel.c_;
+            Eigen::Vector3d c = kernel.p_;
             Eigen::Vector3d v1 = kernel.v1_;
             Eigen::Vector3d v2 = kernel.v2_;
             Eigen::Vector3d n = kernel.n_;
             double sigma_X = kernel.sigma_X;
             double sigma_Y = kernel.sigma_Y;
 
-            if ((point - c).norm() > 5 * h)
-            {
-                continue;
-            }
+//            if ((point - c).norm() > 5 * h)
+//            {
+//                continue;
+//            }
 
             // *******************************debug*********************************//
             double len1 = v1.norm();
@@ -182,12 +191,29 @@ int main()
             double y = (point - c).dot(v2);
             double index = -0.5 * (pow(x, 2) / pow(sigma_X, 2) + pow(y, 2) / pow(sigma_Y, 2));
             double fai = 1 / (2 * M_PI * sigma_X * sigma_Y) * ceres::exp(index);
+            cout << "sigmaX is " << sigma_X << ", sigmaY is " << sigma_Y << endl;
             double dist = (point - c).dot(n);
+//            double residual = fai * (pow(h, 2) - pow((point - c).dot(n), 2));
             double residual = fai * (pow(h, 2) - pow((point - c).dot(n), 2));
+//            residual[0] = fai(p) * (pow(h_, 2) - pow((p - c_).dot(n_), 2));
+//            double residual = fai * pow((point - c).dot(n), 2);
+            if (residual < EPSILON)
+            {
+                residual = 0;
+            }
+//            cout << point << endl;
+//            cout << c << endl;
+//            cout << "dist is " << dist << endl;
+            std::cout << "fai is " << fai << ", residual is " << residual << std::endl;
+            /*if (j++ == 100 || j == 300 || j == 500 || j == 800)
+            {
+                std::cout << "fai is " << fai << ", residual is " << residual << std::endl;
+//                int a = 1;
+            }*/
             // *******************************debug*********************************//
 
             problem.AddResidualBlock(new ceres::AutoDiffCostFunction<SURFACE_FITTING_COST, 1, 3>
-                                    (new SURFACE_FITTING_COST(c, h, v1, v2, n, sigma_X, sigma_Y)),
+                                    (new SURFACE_FITTING_COST(kernel.p_, 0.05, v1, v2, n, sigma_X, sigma_Y)),
                                      nullptr, xyz);
         }
 
@@ -197,19 +223,27 @@ int main()
         ceres::Solver::Summary summary;
         ceres::Solve(options, &problem, &summary);
 
-        std::cout << "A point optimize done, i = " << i++ << std::endl;
-
+//        std::cout << "A point optimize done, i = " << i++ << std::endl;
+        cout << endl;
         // write back optimization results
+        Eigen::Vector3d opt = Eigen::Vector3d(xyz[0], xyz[1], xyz[2]);
+        cout << "diff is " << (opt - point).norm() << endl;
         point = Eigen::Vector3d(xyz[0], xyz[1], xyz[2]);
     }
 
     // Step5: Write back 3D points and export it
-    for (int i = 0; i < cloud->size(); i++)
+    /*for (int i = 0; i < cloud->size(); i++)
     {
         cloud->points[i].x = points[i].x();
         cloud->points[i].y = points[i].y();
         cloud->points[i].z = points[i].z();
     }
 
-    pcl::io::savePLYFile("opt.ply", *cloud);
+    pcl::io::savePLYFile("opt.ply", *cloud);*/
+    std::ofstream fout("/media/psf/Home/Documents/MATLAB/pt.txt");
+    for (const Eigen::Vector3d &pt : points)
+    {
+        fout << pt.x() << " " << pt.y() << " " << pt.z() << std::endl;
+    }
+    fout.close();
 }

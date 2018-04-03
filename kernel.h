@@ -144,9 +144,9 @@ void Kernel::computeEllip()
     // todo:: there should be a ellipse fitting, first extract the boundary, then do cv::fitEllipse
 //    cv::RotatedRect rect = cv::fitEllipse(pts);
     iter = std::max_element(Xs.begin(), Xs.end());
-    sigma_X = *iter / 10;
+    sigma_X = *iter / 1;
     iter = std::max_element(Ys.begin(), Ys.end());
-    sigma_Y = *iter / 10;
+    sigma_Y = *iter / 1;
 }
 
 #endif //INC_3D_POINT_FILTERING_KERNEL_H

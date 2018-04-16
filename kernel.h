@@ -8,6 +8,7 @@
 #include "Eigen/Eigen"
 #include <opencv2/opencv.hpp>
 
+
 class Kernel
 {
 public:

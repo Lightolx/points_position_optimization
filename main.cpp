@@ -96,7 +96,8 @@ int main()
 {
     // Step0: Read in raw points
 
-    std::ifstream fin("scissor.txt");
+//    std::ifstream fin("scissor.txt");
+    std::ifstream fin("/media/psf/Home/Documents/MATLAB_codes/denoise/pts.txt");
     std::string ptline;
     double x, y, z;
     std::vector<Eigen::Vector3d> points;
@@ -108,34 +109,8 @@ int main()
         points.push_back(Eigen::Vector3d(x,y,z));
     }
 
-    /*
-    PointCloudT::Ptr cloud(new PointCloudT);
-//    if (pcl::io::loadPLYFile("dragon.ply", *cloud) < 0)
-//    {
-//        std::cerr << "no ply file found!" << std::endl;
-//        abort();
-//    }
-
-    if (pcl::io::loadPCDFile("office.pcd", *cloud) < 0)
-    {
-        std::cerr << "no ply file found!" << std::endl;
-        abort();
-    }
-
-    std::vector<Eigen::Vector3d> points;
-    points.reserve(cloud->size());
-    for (int i = 0; i < cloud->size(); i++)
-    {
-        points[i].x() = cloud->points[i].x;
-        points[i].y() = cloud->points[i].y;
-        points[i].z() = cloud->points[i].z;
-    }*/
-
-
     // Step1: For every point pi, Construct a kernel including it and its neighborhood, version 1: fixed kernel size
     // step1.1: find pi's neighbor
-    cout << points.size() << endl;
-//    cout << points[554].x() << " " << points[554].y() << " " << points[554].z() << endl;
     PointCloudT::Ptr cloud(new PointCloudT);
     cloud->width = points.size();
     cloud->height = 1;
@@ -151,7 +126,7 @@ int main()
 
     pcl::search::KdTree<PointT>::Ptr kdTree(new pcl::search::KdTree<PointT>);
     kdTree->setInputCloud(cloud);
-    float h = 0.04;                // kernel size
+    float h = 4;                // kernel size
     std::vector<int> pointsID;
     std::vector<float> pointsSquaredDist;
     std::vector<Eigen::Vector3d> neighbors;
@@ -161,11 +136,13 @@ int main()
     // step1.2: packaging pi and its neighbor as a kernel
     int more = 0;
     int less = 0;
+    int k = points.size() / 40;
     for (int i = 0; i < cloud->size(); i++)
     {
         PointT sPoint = cloud->points[i];
 
-        if (kdTree->radiusSearchT(sPoint, h, pointsID, pointsSquaredDist) > 5)
+//        if (kdTree->radiusSearchT(sPoint, h, pointsID, pointsSquaredDist) > 5)
+        if (kdTree->nearestKSearch(sPoint, 10, pointsID, pointsSquaredDist) >= 10)
         {
             more++;
             // set center and size
@@ -177,7 +154,7 @@ int main()
             {
                 neighbors.push_back(points[id]);
             }
-            cout << "neighbor size is " << neighbors.size() << endl;
+//            cout << "neighbor size is " << neighbors.size() << endl;
             kernel.setNeighbors(neighbors);
 
             // store this kernel
@@ -210,15 +187,12 @@ int main()
 
     // Step4: Accumulate all likelihood function to get the cost function, then optimize all
     //        points' position
-    int it = 0;
-//    cout << points.size();
     for (Eigen::Vector3d &point : points)
     {
         double xyz[3] = {point[0], point[1], point[2]};
         ceres::Problem problem;
 
         // add up all kernel's influence as residual blocks
-//        cout << "kernels size is " << kernels.size() << endl;
         std::vector<double> residuals;
         residuals.reserve(kernels.size());
         std::vector<Eigen::Vector3d> cs;
@@ -269,8 +243,8 @@ int main()
 //            cout << point << endl;
 //            cout << c << endl;
 //            cout << "dist is " << dist << endl;
-            residuals.push_back(residual);*/
-            /*if (j++ == 100 || j == 300 || j == 500 || j == 800)
+            residuals.push_back(residual);
+            if (j++ == 100 || j == 300 || j == 500 || j == 800)
             {
                 std::cout << "fai is " << fai << ", residual is " << residual << std::endl;
 //                int a = 1;
@@ -285,7 +259,7 @@ int main()
         ceres::Solver::Options options;
         options.linear_solver_type = ceres::DENSE_NORMAL_CHOLESKY;
 //        options.minimizer_progress_to_stdout = true;
-//        options.max_num_iterations = 100;
+        options.max_num_iterations = 250;
 
         ceres::Solver::Summary summary;
         ceres::Solve(options, &problem, &summary);
@@ -294,11 +268,6 @@ int main()
 
         // write back optimization results
         Eigen::Vector3d opt = Eigen::Vector3d(xyz[0], xyz[1], xyz[2]);
-        if (i == 94)
-        {
-            cout << point << endl;
-            cout << opt << endl;
-        }
         cout << "diff is " << (opt - point).norm() << endl;
 
         /*
@@ -362,7 +331,7 @@ int main()
     }
 
     pcl::io::savePLYFile("opt.ply", *cloud);*/
-    std::ofstream fout("/media/psf/Home/Documents/MATLAB/pt1.txt");
+    std::ofstream fout("/media/psf/Home/Documents/MATLAB_codes/denoise/pt1.txt");
     for (const Eigen::Vector3d &pt : points)
     {
         fout << pt.x() << " " << pt.y() << " " << pt.z() << std::endl;

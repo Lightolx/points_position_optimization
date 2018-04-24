@@ -17,6 +17,9 @@ add_definitions(${CERES_DEFINITIONS})
 find_package(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
+SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}//bin)
+
 add_executable(3D_point_filtering main.cpp kernel.h)
 
 target_link_libraries(3D_point_filtering ${PCL_LIBRARIES} ${CERES_LIBRARIES} ${OpenCV_LIBS})

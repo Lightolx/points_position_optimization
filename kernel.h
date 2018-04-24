@@ -5,149 +5,86 @@
 #ifndef INC_3D_POINT_FILTERING_KERNEL_H
 #define INC_3D_POINT_FILTERING_KERNEL_H
 
+#include <pcl/segmentation/sac_segmentation.h>
 #include "Eigen/Eigen"
 #include <opencv2/opencv.hpp>
 
+typedef pcl::PointXYZ PointT;
+typedef pcl::PointCloud<PointT> PointCloudT;
 
 class Kernel
 {
 public:
     // Constructor
     Kernel() {}
-    Kernel(const Eigen::Vector3d &point, const double &radius): p_(point), h_(radius) {}
+    Kernel(const Eigen::Vector3d &point, double radius): mP(point), mRadius(radius) {}
 
     // Fill in the neighbor of the searching point
     void setNeighbors(const std::vector<Eigen::Vector3d> &points);
 
-    // Compute the covariance matrix
-    void computeC();
-
-    // Compute the normal of the fitted plane
-    void computeNormal();
-
-    // Compute the Gaussian distribution parameter sigma_X and sigma_Y
-    void computeFai();
-
-    // Compute the ellipsoid formed by this kernel, all paremeters included
-    void computeEllip();
-
     // Monotonically decreasing weighted function
     double kai(const Eigen::Vector3d &pt) const;
 
+    // 把这一团点云进行直线拟合
+    void lineFitting();
+
 public:
-    Eigen::Vector3d p_;  // searching point
-    double h_;                // kernel size
-    std::vector<Eigen::Vector3d> neighbors_;  // spatial neighborhood of searching point
-    Eigen::Vector3d c_;  // weighted center point
-    Eigen::Vector3d v1_, v2_;  // orthogonal vectors that consist of the fitted plane
-    Eigen::Vector3d n_;       // normal vector of the least_squared plane fitted to neighbors
-    double sigma_X, sigma_Y; // function fai which is a 2D gaussian distribution
+    Eigen::Vector3d mP;  // searching point
+    double mRadius;
+    std::vector<Eigen::Vector3d> mvNeighbors;  // spatial neighborhood of searching point
+
+    Eigen::Vector3d mC;  // 拟合成的内点的重心
+    Eigen::Vector3d ml;  // 拟合成的直线的方向向量
 };
 
 void Kernel::setNeighbors(const std::vector<Eigen::Vector3d> &points)
 {
-    neighbors_.clear();
-    neighbors_.assign(points.begin(), points.end());
-}
-
-void Kernel::computeC()
-{
-//    C = Eigen::Matrix3d::Zero();
-//
-//    for (const Eigen::Vector3d &pt : neighbors)
-//    {
-//        C += kai(pt) * (pt - cPoint) * (pt - cPoint).inverse();
-//    }
-}
-
-void Kernel::computeNormal()
-{
-
-}
-
-void Kernel::computeFai()
-{
-
+    mvNeighbors.clear();
+    mvNeighbors.assign(points.begin(), points.end());
 }
 
 double Kernel::kai(const Eigen::Vector3d &pt) const
 {
-    double dist = (pt - p_).norm();
-    return 1 - 0.2 * dist / h_;
+    double dist = (pt - mP).norm();
+    return 1 - 0.5 * dist / mRadius;
 }
 
-void Kernel::computeEllip()
+void Kernel::lineFitting()
 {
-    //step1: get the weighted center c_
-    for (const Eigen::Vector3d &pt : neighbors_)
+    PointCloudT::Ptr cloud(new PointCloudT);
+    int numPts = mvNeighbors.size();
+    cloud->width = numPts;
+    cloud->height = 1;
+    cloud->is_dense = false;
+    cloud->resize(cloud->width * cloud->height);
+    for (int i = 0; i < cloud->size(); i++)
     {
-        // todo:: there should be a weighted accumulate, not just a gravity center
-//        c_ += kai(pt) * pt;
-        c_ += pt;
-    }
-    c_ /= neighbors_.size();
-
-    // step2: compute the covariance matrix C
-    Eigen::Matrix3d C = Eigen::Matrix3d::Zero();
-    for (const Eigen::Vector3d &pt : neighbors_)
-    {
-        C += kai(pt) * (pt - c_) * (pt - c_).transpose();
+        cloud->points[i].x = mvNeighbors[i].x();
+        cloud->points[i].y = mvNeighbors[i].y();
+        cloud->points[i].z = mvNeighbors[i].z();
     }
 
-    // step3: eigenvalue decompose C to get the major and minor axis, the two vector form the
-    //        x0y plane, cross them to get normal n as axis z
-    Eigen::EigenSolver<Eigen::Matrix3d> es(C);
-//    std::cout << C << std::endl;
-    Eigen::Matrix3d V = es.pseudoEigenvectors();
-//    std::cout << std::endl << V << std::endl;
-    Eigen::Matrix3d D = es.pseudoEigenvalueMatrix();
-//    std::cout << std::endl << D << std::endl;
-    std::vector<double> eigVals(3);
-    eigVals[0] = D(0, 0);
-    eigVals[1] = D(1, 1);
-    eigVals[2] = D(2, 2);
+    pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
+    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+    pcl::SACSegmentation<pcl::PointXYZ> seg;
+    seg.setOptimizeCoefficients(true);
+    seg.setModelType(pcl::SACMODEL_LINE);
+    seg.setMethodType(pcl::SAC_RANSAC);
+    seg.setDistanceThreshold(0.2);
+    seg.setInputCloud(cloud);
+    seg.segment(*inliers, *coefficients);
+    ml = Eigen::Vector3d(coefficients->values[3], coefficients->values[4], coefficients->values[5]);
+    ml.normalize();
 
-    // return value of pseudoEigenValue() is unordered, so manually find the max and the mid one
-    std::vector<double>::iterator iter = std::max_element(eigVals.begin(), eigVals.end());
-    int maxId = std::distance(eigVals.begin(), iter);
-    iter = std::min_element(eigVals.begin(), eigVals.end());
-    int minId = std::distance(eigVals.begin(), iter);
-    int midId = 0;
-
-    for (int i = 0; i < 3; ++i)
+    Eigen::Vector3d sumP = Eigen::Vector3d::Zero();
+    pcl::PointXYZ pTmp;
+    for (int id : inliers->indices)
     {
-        if (i != maxId && i != minId)
-        {
-            midId = i;
-            break;
-        }
+        pTmp = cloud->points[id];
+        sumP += Eigen::Vector3d(pTmp.x, pTmp.y, pTmp.z);
     }
 
-    v1_ = V.col(maxId);
-    v2_ = V.col(midId);
-    n_ = v1_.cross(v2_);
-
-    // step4: project all neighbors to plane x0y, do a ellipse fitting to get the
-    //        Gaussian distribution parameters sigma_X and sigma_Y
-    std::vector<cv::Point2d> pts;
-    pts.reserve(neighbors_.size());
-    std::vector<double> Xs, Ys;
-    Xs.reserve(neighbors_.size());
-    Ys.reserve(neighbors_.size());
-
-    for (const Eigen::Vector3d &pt : neighbors_)
-    {
-        pts.push_back(cv::Point2d((pt - c_).dot(v1_), (pt - c_).dot(v2_)));
-        Xs.push_back(fabs((pt - c_).dot(v1_)));
-        Ys.push_back(fabs((pt - c_).dot(v2_)));
-    }
-
-    // todo:: there should be a ellipse fitting, first extract the boundary, then do cv::fitEllipse
-//    cv::RotatedRect rect = cv::fitEllipse(pts);
-    iter = std::max_element(Xs.begin(), Xs.end());
-    sigma_X = *iter / 1;
-    iter = std::max_element(Ys.begin(), Ys.end());
-    sigma_Y = *iter / 1;
+    mC = Eigen::Vector3d(coefficients->values[0], coefficients->values[1], coefficients->values[2]);
 }
 
 #endif //INC_3D_POINT_FILTERING_KERNEL_H

@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD 11)
 find_package(PCL REQUIRED)
 include_directories(${PCL_INCLUDE_DIRS})
 add_definitions(${PCL_DEFINITIONS})
+list(REMOVE_ITEM PCL_LIBRARIES "vtkproj4")
 
 # Ceres
 find_package(Ceres REQUIRED)
@@ -17,9 +18,6 @@ add_definitions(${CERES_DEFINITIONS})
 find_package(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
-SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}//bin)
-
-add_executable(3D_point_filtering main.cpp kernel.h)
+add_executable(3D_point_filtering main.cpp Kernel.h Kernel.cpp PointKernel.h PointKernel.cpp LineKernel.h LineKernel.cpp)
 
 target_link_libraries(3D_point_filtering ${PCL_LIBRARIES} ${CERES_LIBRARIES} ${OpenCV_LIBS})

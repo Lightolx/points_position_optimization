@@ -1,130 +1,106 @@
 #include <iostream>
-#include <fstream>
 
 #include <pcl/io/ply_io.h>
-#include <pcl/io/pcd_io.h>
-#include <pcl/point_types.h>
-#include <pcl/registration/icp.h>
 #include <pcl/filters/radius_outlier_removal.h>
+#include <pcl/filters/voxel_grid.h>
 #include <Eigen/Eigen>
+#include <utility>
 #include <ceres/ceres.h>
 
-#include "kernel.h"
+#include "LineKernel.h"
 
 const double EPSILON = 0.000001;
 
 using std::cout;
 using std::endl;
 
-struct SURFACE_FITTING_COST
-{
-    SURFACE_FITTING_COST(const Kernel &kernel): mKernel(kernel)
-            {}
+struct LINE_DIST_COST {
+    LINE_DIST_COST(LineKernel kernel): mKernel(std::move(kernel)) {}
 
     template <typename T>
-    bool operator()(const T* const position, T* residual) const
-    {
+    bool operator()(const T* const position, T* residual) const {
         Eigen::Matrix<T, 3, 1> p(position[0], position[1], position[2]);
-        Eigen::Matrix<T, 3, 1> p0 = mKernel.mC.template cast<T>();
+        Eigen::Matrix<T, 3, 1> p0 = mKernel.mAnchor.template cast<T>();
         Eigen::Matrix<T, 3, 1> l = mKernel.ml.template cast<T>();
         residual[0] = (p - p0).cross(l).norm();
 
         return true;
     }
 
-    const Kernel mKernel;
+    const LineKernel mKernel;
 };
 
-int main()
-{
+int main() {
     // Step0: Read in raw points
-    PointCloudT::Ptr cloud0(new PointCloudT);
-    pcl::io::loadPLYFile("/home/lightol/Lightol_prj/ClusterHDMap/result/ConditionClusteredLanes1_3.ply", *cloud0);
-
-    // Step0.5: Radius outliers remove
-    pcl::RadiusOutlierRemoval<pcl::PointXYZ> outrem;
-    // build the filter
-    outrem.setInputCloud(cloud0);
-    double radius = 1.0;
-    outrem.setRadiusSearch(radius);
-    outrem.setMinNeighborsInRadius(5);
-    // apply filter
     PointCloudT::Ptr cloud(new PointCloudT);
-    outrem.filter (*cloud);
-    pcl::io::savePLYFile("outliers_removed.ply", *cloud);
+    pcl::io::loadPLYFile("/home/lightol/Desktop/result/Line/SolidLine/plys/solid37.ply", *cloud);
+//    pcl::io::loadPLYFile("/home/lightol/Desktop/solid33.ply", *cloud);
 
-    // Step1: For every point pi, Construct a kernel including it and its neighborhood
-    // step1.1: Construct a pcl kd_tree for finding neighbors in sphere whose radius is 1.0m
-    int numPts = cloud->points.size();
-    std::vector<Eigen::Vector3d> vPoints;
-    vPoints.resize(numPts);
+    // Step0.5: 降采样，免得运算量过大
+    pcl::VoxelGrid<PointT> sor;  // 注意用PointT而不是PointCloudT
+    sor.setInputCloud(cloud);
+    sor.setLeafSize(0.03, 0.03, 0.03);
+    PointCloudT::Ptr cloud_temp(new PointCloudT);
+    sor.filter(*cloud_temp);
+    *cloud = *cloud_temp;
 
-    for (int i = 0; i < numPts; i++)
-    {
-        auto pt1 = cloud->points[i];
-        vPoints[i] = Eigen::Vector3d(pt1.x, pt1.y, pt1.z);
-    }
-
+    // Step1: For every point pi, Construct a kernel including it and its neighbors
     pcl::search::KdTree<PointT>::Ptr kdTree(new pcl::search::KdTree<PointT>);
     kdTree->setInputCloud(cloud);
     std::vector<int> vIDs;
     std::vector<float> vSquaredDists;
+    double radius = 0.5;  // 1m范围内车道线点全拿出来拟合直线
 
-    std::vector<Eigen::Vector3d> neighbors;
-    std::vector<Kernel> kernels;
-    kernels.resize(numPts);
+    int numPts = cloud->points.size();
+    std::vector<LineKernel> vKernels;
+    vKernels.resize(numPts);
 
-    // step1.2: package pi with its neighbor as a kernel
-    for (int i = 0; i < numPts; i++)
-    {
+    for (int i = 0; i < numPts; i++) {
         PointT sPoint = cloud->points[i];
 
         kdTree->radiusSearch(sPoint, radius, vIDs, vSquaredDists);
-        if (vIDs.size() < 5)
-        {
+//        cout << "vIDs.size = " << vIDs.size() << endl;
+        if (vIDs.size() < 100) {
             continue;
         }
         // set center and size
-        Kernel kernel(vPoints[i], radius);
+        LineKernel kernel(Eigen::Vector3d(sPoint.x, sPoint.y, sPoint.z), radius);
 
         // set neighbors
-        neighbors.clear();
-        for (int id : vIDs)
-        {
-            neighbors.push_back(vPoints[id]);
+        PointCloudT::Ptr cloud_neighbors(new PointCloudT);
+        for (int id : vIDs) {
+            cloud_neighbors->points.push_back(cloud->points[id]);
         }
-        kernel.setNeighbors(neighbors);
+        kernel.SetNeighborsCloud(cloud_neighbors);
         kernel.lineFitting();
 
-        // store this kernel
-        kernels[i] = kernel;
+        vKernels[i] = kernel;
     }
 
     // Step2: 对每一个3D点，搜索它附近的kernel，调整它的位置直到它到所有kernel的距离最小
     std::vector<Eigen::Vector3d> vNewPoints;
     vNewPoints.resize(numPts);
-//    double distNeibor = 1.5;
+    cout << "numPts = " << numPts << endl;
     for (int i = 0; i < numPts; ++i) {
-        Eigen::Vector3d pt = vPoints[i];
-        double xyz[3] = {pt[0], pt[1], pt[2]};
-        ceres::Problem problem;
+        cout << "i = " << i << endl;
+        PointT sPoint = cloud->points[i];
+        Eigen::Vector3d p(sPoint.x, sPoint.y, sPoint.z);
+        double xyz[3] = {p[0], p[1], p[2]};
 
         // add up all kernel's influence as residual blocks
-        std::vector<double> residuals;
-        residuals.reserve(kernels.size());
-        std::vector<Eigen::Vector3d> cs;
-        for (const Kernel &kernel : kernels)
-        {
-            Eigen::Vector3d p = kernel.mP;
-
-            if ((pt - p).norm() > 1.5 * radius)
-            {
+        ceres::Problem problem;
+        for (const LineKernel &kernel : vKernels) {
+            if (!kernel.mpNeighborsCloud) {  // 这个点是个杂点，附近并没有足够的neighbor来形成一个kernel
                 continue;
             }
 
-            problem.AddResidualBlock(new ceres::AutoDiffCostFunction<SURFACE_FITTING_COST, 1, 3>
-                                             (new SURFACE_FITTING_COST(kernel)),
-                                     nullptr, xyz);
+            Eigen::Vector3d pt = kernel.mP;
+            if ((pt - p).norm() > 1.5 * radius) {  // 由于距离太远，认为点p并不受由pt构成的kernel的影响
+                continue;
+            }
+
+            problem.AddResidualBlock(new ceres::AutoDiffCostFunction<LINE_DIST_COST, 1, 3>
+                                             (new LINE_DIST_COST(kernel)), nullptr, xyz);
         }
 
         ceres::Solver::Options options;
@@ -141,18 +117,11 @@ int main()
     }
 
     // Step5: Write back 3D points and export it
-    for (int i = 0; i < cloud->size(); i++)
-    {
+    for (int i = 0; i < numPts; i++) {
         cloud->points[i].x = vNewPoints[i].x();
         cloud->points[i].y = vNewPoints[i].y();
         cloud->points[i].z = vNewPoints[i].z();
     }
 
-    pcl::io::savePLYFile("opt.ply", *cloud);
-//    std::ofstream fout("pt1.txt");
-//    for (const Eigen::Vector3d &pt : vNewPoints)
-//    {
-//        fout << pt.x() << " " << pt.y() << " " << pt.z() << std::endl;
-//    }
-//    fout.close();
+    pcl::io::savePLYFile("/home/lightol/Desktop/result/Line/SolidLine/ThinLines/opt.ply", *cloud);
 }
